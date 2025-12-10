@@ -1,12 +1,11 @@
 /*
   Play /sdcard/test.wav from SD card on button press (GPIO2)
 
-  - Uses board/APIs in this repo to mount the SD card if available:
-    attempts mount_sdcard(), then sdcard_init() (from the 04_SD_Card sample),
-    and finally falls back to SD_MMC.begin() if necessary.
+  - Uses local sdcard_bsp.h/.cpp (put them in the same directory as this .ino).
+  - Also attempts mount_sdcard() if codec_board API is present.
   - Parses simple 16-bit PCM WAV files and streams to audio_playback_write.
   - Supports 16-bit PCM mono or stereo (mono is duplicated to stereo on the fly).
-  - Keeps original audio init, UART restore, and button ISR/task pattern.
+  - Keep original audio init, UART restore, and button ISR/task pattern.
   - Place a 16-bit PCM WAV at /sdcard/test.wav (the repo's SD examples use /sdcard path).
 */
 
@@ -24,10 +23,13 @@
 #include "driver/gpio.h"  // GPIO_NUM_1 / GPIO_NUM_3 (if used by other code)
 #include "esp_heap_caps.h" // heap_caps_malloc
 
-// SD APIs / sample SD files in repo
+// SD APIs
 #include <SD_MMC.h>           // primary SD_MMC access
-#include "src/codec_board/codec_init.h" // mount_sdcard() declaration (if available)
-#include "sdcard_bsp.h"      // sdcard_init() from the sample sketch (if available)
+#include "sdcard_bsp.h"       // <-- local file you said you'll put beside the .ino
+// Optional: codec_board mount API (left as a fallback)
+#if __has_include("src/codec_board/codec_init.h")
+  #include "src/codec_board/codec_init.h"
+#endif
 
 // --- Playback / button configuration ---
 const int SAMPLE_RATE_HZ    = 16000; // codec audio sample rate used by board
@@ -62,36 +64,30 @@ void IRAM_ATTR button_isr()
   }
 }
 
-/* Try to ensure SD card is mounted. We prefer mount_sdcard() (codec_board API),
-   then sdcard_init() from the 04_SD_Card sample, then SD_MMC.begin() fallback. */
+/* Try to ensure SD card is mounted. Prefer mount_sdcard(), then local sdcard_init(),
+   then SD_MMC.begin() fallback. */
 static bool ensure_sd_mounted()
 {
-  // Try mount_sdcard() if available
-  #if defined(__has_include)
-    #if __has_include("src/codec_board/codec_init.h")
-      // mount_sdcard() declared in codec_init.h; call it
-      if (mount_sdcard() == 0) {
-        Serial.println("Mounted SD via mount_sdcard()");
-        return true;
-      } else {
-        Serial.println("mount_sdcard() failed or not configured for this board");
-      }
-    #endif
+  // Try mount_sdcard() if header was present at compile time
+  #if defined(mount_sdcard)
+    if (mount_sdcard() == 0) {
+      Serial.println("Mounted SD via mount_sdcard()");
+      return true;
+    } else {
+      Serial.println("mount_sdcard() failed or not configured for this board");
+    }
   #endif
 
-  // Try sdcard_init() from sample (04_SD_Card)
-  #if defined(__has_include)
-    #if __has_include("04_SD_Card/sdcard_bsp.h")
-      // sdcard_init() used by sample 04_SD_Card.ino
-      sdcard_init();
-      // sdcard_init() in sample typically mounts under /sdcard using SD_MMC; we check SD_MMC
-      if (SD_MMC.begin()) {
-        Serial.println("SD_MMC began after sdcard_init()");
-        return true;
-      } else {
-        Serial.println("sdcard_init() called but SD_MMC.begin() still failed");
-      }
-    #endif
+  // Call sdcard_init() from local sdcard_bsp if available
+  #if defined(sdcard_init)
+    sdcard_init();
+    // sdcard_init() typically calls SD_MMC.begin() and mounts to /sdcard
+    if (SD_MMC.begin()) {
+      Serial.println("SD_MMC began after sdcard_init()");
+      return true;
+    } else {
+      Serial.println("sdcard_init() called but SD_MMC.begin() still failed");
+    }
   #endif
 
   // Fallback: try SD_MMC directly
